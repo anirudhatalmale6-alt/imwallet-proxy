@@ -85,6 +85,9 @@ const server = http.createServer((req, res) => {
     const targetUrl = IMWALLET_BASE + targetPath + (qs ? '?' + qs : '');
     const targetParsed = url.parse(targetUrl);
 
+    console.log(`[${new Date().toISOString()}] PROXY ${targetPath}`);
+
+    // Direct connection to IMwalleT (Render's IP must be whitelisted)
     const options = {
         hostname: targetParsed.hostname,
         port: 443,
@@ -94,10 +97,8 @@ const server = http.createServer((req, res) => {
             'User-Agent': 'BudgetIQ-Proxy/1.0',
             'Accept': 'application/json',
         },
-        timeout: 25000,
+        timeout: 30000,
     };
-
-    console.log(`[${new Date().toISOString()}] PROXY ${targetPath}`);
 
     const proxyReq = https.request(options, (proxyRes) => {
         let body = '';
@@ -117,7 +118,7 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({
             error: 'Proxy connection failed',
             detail: err.message,
-            hint: 'Is the proxy IP whitelisted in IMwalleT?'
+            hint: 'Ensure Render IP is whitelisted in IMwalleT'
         }));
     });
 
@@ -125,10 +126,7 @@ const server = http.createServer((req, res) => {
         console.error('  -> TIMEOUT');
         proxyReq.destroy();
         res.writeHead(504, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            error: 'Proxy timeout',
-            hint: 'IMwalleT may be blocking this IP. Check /ip endpoint and whitelist it.'
-        }));
+        res.end(JSON.stringify({ error: 'Proxy timeout' }));
     });
 
     proxyReq.end();
