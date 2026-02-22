@@ -134,4 +134,16 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
     console.log(`IMwalleT Proxy running on port ${PORT}`);
+
+    // Self-ping every 10 min to prevent Render free tier from sleeping
+    const KEEP_ALIVE_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    setInterval(() => {
+        const pingUrl = KEEP_ALIVE_URL + '/health';
+        const mod = pingUrl.startsWith('https') ? https : http;
+        mod.get(pingUrl, (r) => {
+            let b = '';
+            r.on('data', (c) => { b += c; });
+            r.on('end', () => { console.log(`[keep-alive] ${r.statusCode}`); });
+        }).on('error', (e) => { console.log(`[keep-alive] err: ${e.message}`); });
+    }, 10 * 60 * 1000);
 });
