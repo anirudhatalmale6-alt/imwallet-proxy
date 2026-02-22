@@ -3,8 +3,8 @@ services:
     name: imwallet-proxy
     runtime: node
     plan: free
-    buildCommand: ""
-    startCommand: node server.js
+    buildCommand: "echo 'No build needed'"
+    startCommand: "node server.js"
     envVars:
       - key: PROXY_SECRET
         value: biq_imw_proxy_2026

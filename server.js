@@ -7,8 +7,8 @@ const PROXY_SECRET = process.env.PROXY_SECRET || 'biq_imw_proxy_2026';
 const IMWALLET_BASE = 'https://partner.imwallet.in';
 
 const server = http.createServer((req, res) => {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', 'https://optioninsights.in');
+    // CORS
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Proxy-Secret');
 
@@ -18,10 +18,31 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    const parsed = url.parse(req.url, true);
+
     // Health check
-    if (req.url === '/health') {
+    if (parsed.pathname === '/health' || parsed.pathname === '/') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+        return;
+    }
+
+    // IP check - fetches outbound IP so we know what to whitelist
+    if (parsed.pathname === '/ip') {
+        https.get('https://api.ipify.org?format=json', (ipRes) => {
+            let body = '';
+            ipRes.on('data', (c) => { body += c; });
+            ipRes.on('end', () => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    outbound_ip: JSON.parse(body).ip,
+                    note: 'Whitelist this IP in IMwalleT panel'
+                }));
+            });
+        }).on('error', () => {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Could not detect IP' }));
+        });
         return;
     }
 
@@ -33,23 +54,42 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // Only allow /web_services/ paths
-    const parsed = url.parse(req.url, true);
-    if (!parsed.pathname.startsWith('/web_services/')) {
+    // Route: /api/proxy?path=/web_services/...&param1=val1&param2=val2
+    // Also supports direct: /web_services/...?params
+    let targetPath;
+    let targetParams = {};
+
+    if (parsed.pathname === '/api/proxy') {
+        targetPath = parsed.query.path;
+        // Copy all query params except 'path'
+        Object.keys(parsed.query).forEach(k => {
+            if (k !== 'path') targetParams[k] = parsed.query[k];
+        });
+    } else if (parsed.pathname.startsWith('/web_services/')) {
+        targetPath = parsed.pathname;
+        targetParams = parsed.query || {};
+    } else {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid path' }));
         return;
     }
 
+    if (!targetPath || !targetPath.startsWith('/web_services/')) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Path must start with /web_services/' }));
+        return;
+    }
+
     // Build target URL
-    const targetUrl = IMWALLET_BASE + req.url;
+    const qs = new URLSearchParams(targetParams).toString();
+    const targetUrl = IMWALLET_BASE + targetPath + (qs ? '?' + qs : '');
     const targetParsed = url.parse(targetUrl);
 
     const options = {
         hostname: targetParsed.hostname,
-        port: targetParsed.port || 443,
+        port: 443,
         path: targetParsed.path,
-        method: req.method,
+        method: 'GET',
         headers: {
             'User-Agent': 'BudgetIQ-Proxy/1.0',
             'Accept': 'application/json',
@@ -57,7 +97,7 @@ const server = http.createServer((req, res) => {
         timeout: 25000,
     };
 
-    console.log(`[${new Date().toISOString()}] ${req.method} ${parsed.pathname}`);
+    console.log(`[${new Date().toISOString()}] PROXY ${targetPath}`);
 
     const proxyReq = https.request(options, (proxyRes) => {
         let body = '';
@@ -74,27 +114,24 @@ const server = http.createServer((req, res) => {
     proxyReq.on('error', (err) => {
         console.error(`  -> ERROR: ${err.message}`);
         res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Proxy connection failed', detail: err.message }));
+        res.end(JSON.stringify({
+            error: 'Proxy connection failed',
+            detail: err.message,
+            hint: 'Is the proxy IP whitelisted in IMwalleT?'
+        }));
     });
 
     proxyReq.on('timeout', () => {
         console.error('  -> TIMEOUT');
         proxyReq.destroy();
         res.writeHead(504, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Proxy timeout' }));
+        res.end(JSON.stringify({
+            error: 'Proxy timeout',
+            hint: 'IMwalleT may be blocking this IP. Check /ip endpoint and whitelist it.'
+        }));
     });
 
-    // Forward POST body if present
-    if (req.method === 'POST') {
-        let reqBody = '';
-        req.on('data', (chunk) => { reqBody += chunk; });
-        req.on('end', () => {
-            proxyReq.write(reqBody);
-            proxyReq.end();
-        });
-    } else {
-        proxyReq.end();
-    }
+    proxyReq.end();
 });
 
 server.listen(PORT, () => {
